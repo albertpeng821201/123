@@ -3,6 +3,10 @@
 #include "xil_io.h"
 #include "xparameters.h"
 #include "profile_cnt.h"
+#include "xgray_scale.h"
+#include "xscugic.h"
+// setting by myself
+#define VDMA_GRAYSCALE XPAR_AXI_VDMA_0_BASEADDR
 
 #define OV7670_STREAM XPAR_OV7670_DECODE_STREAM_0_0
 #define VDMA_MM2S XPAR_VDMA_MM2S_BASEADDR
@@ -202,11 +206,8 @@ void captureRaw(u32 src, u32 dst) {
 	}
 }
 
-void convToGray(u32 src, u32 dst) {
-  // Enter your code here
-}
 
-/*
+
 void Grayscale_ISR(void* InstancePtr) {
   // see Xilinx tutorial!!
   int enabled_list;
@@ -216,9 +217,18 @@ void Grayscale_ISR(void* InstancePtr) {
 
   enabled_list = XGray_scale_InterruptGetEnabled(grayscale_filter);
   status_list = XGray_scale_InterruptGetStatus(grayscale_filter);
+
+  init_perfcounters(1,0);
+  EnablePerfCounters();
+  u32 value2;
+
   if ((enabled_list & 1) && (status_list & 1)) {
-	xil_printf("interrupt acknowledged\n");
+	//xil_printf("interrupt acknowledged\n");
 	XGray_scale_InterruptClear(grayscale_filter, 1);
+	 u32 value = get_cyclecount();
+	 double value3 = (value-value2)/(double)667000;
+	 printf("grayscale cycle %f ms\r",value3);
+	 value2 = value;
   }
   XGray_scale_InterruptGlobalEnable(grayscale_filter);
 }
@@ -242,25 +252,77 @@ int setupInterrupt(XScuGic *interrupt_controller,
 
   return Status;
 }
-*/
+//void convToGray(u32 src, u32 dst) {
+  // Enter your code here
+//	size_t offset1 = src;
+//	size_t offset2 = dst;
+//		for (size_t row = 0; row < WIDTH; ++row) {
+//		  for (size_t col = 0; col < HEIGHT; ++col) {
+//			u32 pixel = Xil_In32(offset1);
+//			u32 b = (u32) (pixel&0xff);
+//			u32 g = (u32) ((pixel>>8) & 0xff);
+//			u32 r = (u32) ((pixel>>16) & 0xff);
+//			u32 tmp1 = (double)(r*0.299+g*0.587+b*0.114);
+//			u32 tmp2 = tmp1 & 0xff;
+//			u32 pixel2 = (tmp2<<16) | (tmp2<<8) | (tmp2);
+//			Xil_Out32(offset2, pixel2);
+
+//			offset1 = offset1 + 4;
+//			offset2 = offset2 + 4;
+//		  }
+//		}
+//}
 
 int main() {
   vdma_handle handle_s2mm;
   vdma_handle handle_mm2s;
-
+  /////////////////////////////////////////////////////////////////////////////////////
+  XGray_scale grayscale_filter;
+  int Status = XGray_scale_Initialize(&grayscale_filter,XPAR_GRAY_SCALE_0_DEVICE_ID);
+  if(Status != XST_SUCCESS)
+  {
+	  xil_printf("GrayscaleIP is not initialized properly \r\n");
+	  return XST_FAILURE;
+  }
+  XGray_scale_SetRows(&grayscale_filter,HEIGHT);
+  XGray_scale_SetCols(&grayscale_filter,WIDTH);
+  XGray_scale_EnableAutoRestart(&grayscale_filter);
+  XGray_scale_Start(&grayscale_filter);
+  // config Grayscale IP
+  XGray_scale_InterruptGlobalEnable(&grayscale_filter);
+  XGray_scale_InterruptEnable(&grayscale_filter,1);
+  XScuGic interrupt_controller;
+  Status = setupInterrupt(&interrupt_controller,&grayscale_filter);
+  /////////////////////////////////////////////////////////////////////////////////////
+  vdma_handle grayscale_vdma_handle_s2mm;
+  vdma_handle grayscale_vdma_handle_mm2s;
+  /////////////////////////////////////////////////////////////////////////////////////
+  vdma_setup(&grayscale_vdma_handle_mm2s, VDMA_GRAYSCALE, WIDTH, HEIGHT, 4, VIDEO_RGB888_BASEADDR);
+  vdma_setup(&grayscale_vdma_handle_s2mm, VDMA_GRAYSCALE, WIDTH, HEIGHT, 4, PROC_VIDEO_BASEADDR);
+  /////////////////////////////////////////////////////////////////////////////////////
   // Setup VDMA handle and memory-mapped ranges
   vdma_setup(&handle_s2mm, VDMA_S2MM, WIDTH, HEIGHT, 2, VIDEO_RGB585_BASEADDR);
-  vdma_setup(&handle_mm2s, VDMA_MM2S, WIDTH, HEIGHT, 4, VIDEO_RGB888_BASEADDR);
+  vdma_setup(&handle_mm2s, VDMA_MM2S, WIDTH, HEIGHT, 4, PROC_VIDEO_BASEADDR);
 
   // Start triple buffering
   vdma_start_s2mm(&handle_s2mm);
   vdma_start_mm2s(&handle_mm2s);
 
+  vdma_start_mm2s(&grayscale_vdma_handle_mm2s);
+  vdma_start_s2mm(&grayscale_vdma_handle_s2mm);
+
+
   Xil_Out32(OV7670_STREAM, 1); 
 
   while (1) {
     captureRaw(VIDEO_RGB585_BASEADDR, VIDEO_RGB888_BASEADDR);
-    convToGray(VIDEO_RGB888_BASEADDR, PROC_VIDEO_BASEADDR);
+
+    //convToGray(VIDEO_RGB888_BASEADDR, PROC_VIDEO_BASEADDR);
+
+      //  u32 value = get_cyclecount();
+        //double value3 = (value-value2)/(double)667000;
+      //  printf("grayscale cycle %f ms\r",value3);
+       // value2 = value;
   }
 
   return 0;
